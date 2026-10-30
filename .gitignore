@@ -1,0 +1,12 @@
+# Studio lock files
+*.rbxlx.lock
+*.rbxl.lock
+
+# Python
+__pycache__/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# BuildMenu.rbxlx stays in the repo on purpose: it's the ready-to-open place.

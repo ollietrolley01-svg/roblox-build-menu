@@ -1,0 +1,1698 @@
+<?xml version='1.0' encoding='utf-8'?>
+<roblox xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Item class="Workspace" referent="RBX1"><Properties><string name="Name">Workspace</string><bool name="StreamingEnabled">false</bool></Properties><Item class="Part" referent="RBX2"><Properties><string name="Name">Baseplate</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>-2</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>512</X><Y>4</Y><Z>512</Z></Vector3><Color3uint8 name="Color3uint8">4284126800</Color3uint8><token name="Material">1280</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX3"><Properties><string name="Name">BuildArea</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>0.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>96</X><Y>1</Y><Z>96</Z></Vector3><Color3uint8 name="Color3uint8">4291677650</Color3uint8><token name="Material">816</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="SpawnLocation" referent="RBX4"><Properties><string name="Name">SpawnLocation</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>0.5</Y><Z>-56</Z><R00>-1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>-1</R22></CoordinateFrame><Vector3 name="size"><X>12</X><Y>1</Y><Z>12</Z></Vector3><Color3uint8 name="Color3uint8">4285429895</Color3uint8><token name="Material">272</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token><int name="Duration">0</int></Properties></Item></Item><Item class="Lighting" referent="RBX5"><Properties><string name="Name">Lighting</string><token name="Technology">4</token><float name="ClockTime">14</float><float name="Brightness">2</float><bool name="GlobalShadows">true</bool></Properties></Item><Item class="ReplicatedStorage" referent="RBX6"><Properties><string name="Name">ReplicatedStorage</string></Properties><Item class="Folder" referent="RBX7"><Properties><string name="Name">BuildMenu</string></Properties><Item class="ModuleScript" referent="RBX8"><Properties><string name="Name">Catalog</string><ProtectedString name="Source">-- Reads the parts you can place from ReplicatedStorage.BuildParts.
+--
+--   BuildParts
+--     Walls            &lt;- a Folder is a tab in the menu
+--       Brick Wall     &lt;- a Model (or a single Part) is a card in that tab
+--
+-- Optional attributes (Properties window &gt; Attributes &gt; +):
+--   on a tab folder   Order (number, lower comes first), Floor (true: everything in it is a floor tile)
+--   on a model        DisplayName (text on the card), Order (number), Floor (true: a floor tile)
+-- Floor tiles lie flat and only bump into other floor tiles, so walls and furniture can stand on them.
+-- Parts straight inside BuildParts (not in a folder) go in an "Other" tab.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(script.Parent.Config)
+
+local Catalog = {}
+
+local OTHER = "Other"
+local measured = setmetatable({}, { __mode = "k" }) -- [model] = its entry, worked out once
+
+local function partsFolder()
+	return ReplicatedStorage:WaitForChild(Config.PartsFolder)
+end
+
+local function usable(thing)
+	if thing:IsA("BasePart") then
+		return true
+	end
+	return thing:IsA("Model") and thing:FindFirstChildWhichIsA("BasePart", true) ~= nil
+end
+
+local function orderOf(thing)
+	local order = thing:GetAttribute("Order")
+	return type(order) == "number" and order or math.huge
+end
+
+local function sorted(a, b)
+	if a.order ~= b.order then
+		return a.order &lt; b.order
+	end
+	return a.name &lt; b.name
+end
+
+-- The menu entry for one model: its name, which tab it's in, and its size.
+function Catalog.entry(model, tab)
+	local entry = measured[model]
+	if entry then
+		return entry
+	end
+	local box, size
+	if model:IsA("BasePart") then
+		box, size = model.CFrame, model.Size
+	else
+		box, size = model:GetBoundingBox()
+	end
+	local bottom = box * CFrame.new(0, -size.Y / 2, 0)
+	local tabName = tab and tab.Name or OTHER
+	entry = {
+		id = tabName .. "/" .. model.Name,
+		name = model:GetAttribute("DisplayName") or model.Name,
+		tab = tabName,
+		order = orderOf(model),
+		model = model,
+		size = size,
+		offset = bottom:ToObjectSpace(model:GetPivot()), -- the model's pivot, seen from its bottom centre
+		floor = model:GetAttribute("Floor") == true or (tab ~= nil and tab:GetAttribute("Floor") == true),
+	}
+	measured[model] = entry
+	return entry
+end
+
+-- Every tab with its parts, in menu order: { { name, items = { entry, ... } }, ... }
+function Catalog.tabs()
+	local tabs = {}
+	local loose = {}
+	for _, child in ipairs(partsFolder():GetChildren()) do
+		if child:IsA("Folder") then
+			local tab = { name = child.Name, order = orderOf(child), items = {} }
+			for _, model in ipairs(child:GetChildren()) do
+				if usable(model) then
+					table.insert(tab.items, Catalog.entry(model, child))
+				end
+			end
+			if #tab.items &gt; 0 then
+				table.insert(tabs, tab)
+			end
+		elseif usable(child) then
+			table.insert(loose, Catalog.entry(child, nil))
+		end
+	end
+	if #loose &gt; 0 then
+		table.insert(tabs, { name = OTHER, order = math.huge, items = loose })
+	end
+	table.sort(tabs, sorted)
+	for _, tab in ipairs(tabs) do
+		table.sort(tab.items, sorted)
+	end
+	return tabs
+end
+
+-- The entry for an id like "Walls/Brick Wall", or nil if there's no such part.
+function Catalog.find(id)
+	if type(id) ~= "string" then
+		return nil
+	end
+	local tabName, name = string.match(id, "^(.-)/(.+)$")
+	if not tabName then
+		return nil
+	end
+	local root = partsFolder()
+	local tab = root:FindFirstChild(tabName)
+	local model
+	if tab and tab:IsA("Folder") then
+		model = tab:FindFirstChild(name)
+	elseif tabName == OTHER then
+		tab = nil
+		model = root:FindFirstChild(name)
+	end
+	if model and usable(model) then
+		return Catalog.entry(model, tab)
+	end
+	return nil
+end
+
+return Catalog
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX9"><Properties><string name="Name">Config</string><ProtectedString name="Source">-- Build menu settings. Change these to make the menu your own.
+
+local Config = {}
+
+-- Where things live
+Config.PartsFolder = "BuildParts" -- ReplicatedStorage.BuildParts: a folder per menu tab, a Model per part
+Config.AreaName = "BuildArea" -- you can build on top of any part in Workspace with this name
+Config.PlacedFolder = "PlacedParts" -- placed parts go into Workspace.PlacedParts
+
+-- Placing
+Config.GridSize = 2 -- studs per grid square
+Config.FloorLift = 0.05 -- floor tiles stick up this far out of the build area, so nothing flickers
+Config.MaxPartsPerPlayer = 300
+Config.AnchorPlacedParts = true -- anchor every placed part so nothing falls over
+Config.RemovePartsOnLeave = true -- a player's parts go when they leave
+Config.RequestsPerSecond = 8 -- how fast one player may place or delete
+
+-- Keys (PC). Phones and tablets get buttons instead.
+Config.Keys = {
+	Toggle = Enum.KeyCode.B, -- open / close the menu
+	Rotate = Enum.KeyCode.R,
+	Delete = Enum.KeyCode.X, -- delete mode on / off
+	Stop = Enum.KeyCode.Q, -- stop placing or deleting
+}
+
+-- Colours and font
+Config.Theme = {
+	Panel = Color3.fromRGB(28, 30, 38),
+	Card = Color3.fromRGB(46, 49, 61),
+	Text = Color3.fromRGB(240, 240, 245),
+	Muted = Color3.fromRGB(165, 170, 185),
+	Accent = Color3.fromRGB(255, 176, 59),
+	Good = Color3.fromRGB(90, 220, 120),
+	Bad = Color3.fromRGB(235, 80, 70),
+	Font = Enum.Font.GothamBold,
+}
+
+return Config
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX10"><Properties><string name="Name">Grid</string><ProtectedString name="Source">-- Grid maths shared by your screen (where the ghost goes) and the server (where the part really goes),
+-- so both always agree.
+
+local Config = require(script.Parent.Config)
+
+local Grid = {}
+
+-- True when `part` is a build area: a part in Workspace named Config.AreaName.
+function Grid.isArea(part)
+	return typeof(part) == "Instance"
+		and part:IsA("BasePart")
+		and part.Name == Config.AreaName
+		and part:IsDescendantOf(workspace)
+end
+
+-- How many grid squares a part covers across (x) and deep (z) after `turns` quarter turns.
+function Grid.cells(entry, turns)
+	local size = Config.GridSize
+	local x = math.max(1, math.ceil(entry.size.X / size - 0.01))
+	local z = math.max(1, math.ceil(entry.size.Z / size - 0.01))
+	if turns % 2 == 1 then
+		x, z = z, x
+	end
+	return x, z
+end
+
+-- Snaps a spot on a build area to the grid and works out everything about putting `entry` there.
+-- x and z are studs from the area's centre, in the area's own directions (so turned areas work too).
+-- Returns:
+--   x, z          the snapped spot (this is what the client sends the server)
+--   pivot         the CFrame to PivotTo the model to
+--   ground        a CFrame on the area's top surface under the middle of the part
+--   box, boxSize  the space the part takes up
+--   inside        true when all of it is on the area
+function Grid.solve(area, entry, x, z, turns)
+	local size = Config.GridSize
+	local cellsX, cellsZ = Grid.cells(entry, turns)
+	local half = area.Size / 2
+	-- the part's corner goes on a grid line, counted from the area's corner
+	local minX = math.floor((x - cellsX * size / 2 + half.X) / size + 0.5) * size - half.X
+	local minZ = math.floor((z - cellsZ * size / 2 + half.Z) / size + 0.5) * size - half.Z
+	local maxX, maxZ = minX + cellsX * size, minZ + cellsZ * size
+	local midX, midZ = (minX + maxX) / 2, (minZ + maxZ) / 2
+	local height = entry.size.Y
+	-- floor tiles sink into the area until only Config.FloorLift sticks out; everything else stands on top
+	local baseY = half.Y + (entry.floor and Config.FloorLift - height or 0)
+	local bottom = area.CFrame * CFrame.new(midX, baseY, midZ) * CFrame.Angles(0, turns * math.pi / 2, 0)
+	local edge = 0.001
+	return {
+		x = midX,
+		z = midZ,
+		pivot = bottom * entry.offset,
+		ground = area.CFrame * CFrame.new(midX, half.Y, midZ),
+		box = area.CFrame * CFrame.new(midX, baseY + height / 2, midZ),
+		boxSize = Vector3.new(cellsX * size, height, cellsZ * size),
+		inside = minX &gt;= -half.X - edge and maxX &lt;= half.X + edge and minZ &gt;= -half.Z - edge and maxZ &lt;= half.Z + edge,
+	}
+end
+
+-- The placed model (a child of the PlacedParts folder) that `part` belongs to, or nil.
+function Grid.placedRoot(part, placed)
+	local thing = part
+	while thing and thing.Parent ~= placed do
+		thing = thing.Parent
+	end
+	return thing
+end
+
+-- True when nothing already placed is in the way of `spot`. Floor tiles only bump into floor tiles and
+-- everything else only into everything else, so walls and furniture can stand on floors.
+function Grid.isFree(spot, entry, placed)
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { placed }
+	-- a little smaller than the squares, so parts can stand right next to each other
+	local inside = spot.boxSize - Vector3.new(0.1, 0.1, 0.1)
+	for _, part in ipairs(workspace:GetPartBoundsInBox(spot.box, inside, params)) do
+		local thing = Grid.placedRoot(part, placed)
+		if thing and (thing:GetAttribute("Floor") == true) == entry.floor then
+			return false
+		end
+	end
+	return true
+end
+
+return Grid
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX11"><Properties><string name="Name">BuildParts</string></Properties><Item class="Folder" referent="RBX12"><Properties><string name="Name">Floors</string><BinaryString name="AttributesSerialize">AgAAAAUAAABPcmRlcgYAAAAAAADwPwUAAABGbG9vcgMB</BinaryString></Properties><Item class="Model" referent="RBX13"><Properties><string name="Name">Wood Floor</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAADwPw==</BinaryString></Properties><Item class="Part" referent="RBX14"><Properties><string name="Name">Floor</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>0.2</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>8</X><Y>0.4</Y><Z>8</Z></Vector3><Color3uint8 name="Color3uint8">4289033030</Color3uint8><token name="Material">528</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item></Item><Item class="Model" referent="RBX15"><Properties><string name="Name">Stone Tile</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAAQA==</BinaryString></Properties><Item class="Part" referent="RBX16"><Properties><string name="Name">Tile</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>0.2</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>4</X><Y>0.4</Y><Z>4</Z></Vector3><Color3uint8 name="Color3uint8">4287401108</Color3uint8><token name="Material">800</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item></Item></Item><Item class="Folder" referent="RBX17"><Properties><string name="Name">Walls</string><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAAQA==</BinaryString></Properties><Item class="Model" referent="RBX18"><Properties><string name="Name">Brick Wall</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAADwPw==</BinaryString></Properties><Item class="Part" referent="RBX19"><Properties><string name="Name">Wall</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>4</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>8</X><Y>8</Y><Z>1</Z></Vector3><Color3uint8 name="Color3uint8">4289024060</Color3uint8><token name="Material">848</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item></Item><Item class="Model" referent="RBX20"><Properties><string name="Name">Window Wall</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAAQA==</BinaryString></Properties><Item class="Part" referent="RBX21"><Properties><string name="Name">Bottom</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>1.25</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>8</X><Y>2.5</Y><Z>1</Z></Vector3><Color3uint8 name="Color3uint8">4289024060</Color3uint8><token name="Material">848</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX22"><Properties><string name="Name">Top</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>7.25</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>8</X><Y>1.5</Y><Z>1</Z></Vector3><Color3uint8 name="Color3uint8">4289024060</Color3uint8><token name="Material">848</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX23"><Properties><string name="Name">Left</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>-3.25</X><Y>4.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1.5</X><Y>4</Y><Z>1</Z></Vector3><Color3uint8 name="Color3uint8">4289024060</Color3uint8><token name="Material">848</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX24"><Properties><string name="Name">Right</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>3.25</X><Y>4.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1.5</X><Y>4</Y><Z>1</Z></Vector3><Color3uint8 name="Color3uint8">4289024060</Color3uint8><token name="Material">848</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX25"><Properties><string name="Name">Glass</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>4.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>5</X><Y>4</Y><Z>0.2</Z></Vector3><Color3uint8 name="Color3uint8">4289385190</Color3uint8><token name="Material">1568</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token><float name="Transparency">0.5</float></Properties></Item></Item></Item><Item class="Folder" referent="RBX26"><Properties><string name="Name">Furniture</string><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAIQA==</BinaryString></Properties><Item class="Model" referent="RBX27"><Properties><string name="Name">Table</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAADwPw==</BinaryString></Properties><Item class="Part" referent="RBX28"><Properties><string name="Name">Top</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>2.8</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>6</X><Y>0.4</Y><Z>4</Z></Vector3><Color3uint8 name="Color3uint8">4288046140</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX29"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>-2.6</X><Y>1.3</Y><Z>-1.6</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.4</X><Y>2.6</Y><Z>0.4</Z></Vector3><Color3uint8 name="Color3uint8">4288046140</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX30"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>-2.6</X><Y>1.3</Y><Z>1.6</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.4</X><Y>2.6</Y><Z>0.4</Z></Vector3><Color3uint8 name="Color3uint8">4288046140</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX31"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>2.6</X><Y>1.3</Y><Z>-1.6</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.4</X><Y>2.6</Y><Z>0.4</Z></Vector3><Color3uint8 name="Color3uint8">4288046140</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX32"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>2.6</X><Y>1.3</Y><Z>1.6</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.4</X><Y>2.6</Y><Z>0.4</Z></Vector3><Color3uint8 name="Color3uint8">4288046140</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item></Item><Item class="Model" referent="RBX33"><Properties><string name="Name">Chair</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAAQA==</BinaryString></Properties><Item class="Part" referent="RBX34"><Properties><string name="Name">Seat</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>1.65</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>2</X><Y>0.3</Y><Z>2</Z></Vector3><Color3uint8 name="Color3uint8">4285745965</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX35"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>-0.8</X><Y>0.75</Y><Z>-0.8</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.3</X><Y>1.5</Y><Z>0.3</Z></Vector3><Color3uint8 name="Color3uint8">4285745965</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX36"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>-0.8</X><Y>0.75</Y><Z>0.8</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.3</X><Y>1.5</Y><Z>0.3</Z></Vector3><Color3uint8 name="Color3uint8">4285745965</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX37"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0.8</X><Y>0.75</Y><Z>-0.8</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.3</X><Y>1.5</Y><Z>0.3</Z></Vector3><Color3uint8 name="Color3uint8">4285745965</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX38"><Properties><string name="Name">Leg</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0.8</X><Y>0.75</Y><Z>0.8</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.3</X><Y>1.5</Y><Z>0.3</Z></Vector3><Color3uint8 name="Color3uint8">4285745965</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX39"><Properties><string name="Name">Back</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>2.8</Y><Z>0.85</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>2</X><Y>2</Y><Z>0.3</Z></Vector3><Color3uint8 name="Color3uint8">4285745965</Color3uint8><token name="Material">512</token><token name="shape">1</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item></Item></Item><Item class="Folder" referent="RBX40"><Properties><string name="Name">Decor</string><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAQQA==</BinaryString></Properties><Item class="Model" referent="RBX41"><Properties><string name="Name">Lamp</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAADwPw==</BinaryString></Properties><Item class="Part" referent="RBX42"><Properties><string name="Name">Base</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>0.15</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.3</X><Y>2</Y><Z>2</Z></Vector3><Color3uint8 name="Color3uint8">4282796110</Color3uint8><token name="Material">1088</token><token name="shape">2</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX43"><Properties><string name="Name">Pole</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>2.75</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>4.9</X><Y>0.3</Y><Z>0.3</Z></Vector3><Color3uint8 name="Color3uint8">4282796110</Color3uint8><token name="Material">1088</token><token name="shape">2</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX44"><Properties><string name="Name">Bulb</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.9</X><Y>0.9</Y><Z>0.9</Z></Vector3><Color3uint8 name="Color3uint8">4294958230</Color3uint8><token name="Material">288</token><token name="shape">0</token><token name="TopSurface">0</token><token name="BottomSurface">0</token><bool name="CastShadow">false</bool></Properties><Item class="PointLight" referent="RBX45"><Properties><string name="Name">Light</string><float name="Range">16</float><float name="Brightness">1.5</float><Color3 name="Color"><R>1</R><G>0.82</G><B>0.6</B></Color3><bool name="Shadows">true</bool></Properties></Item></Item><Item class="Part" referent="RBX46"><Properties><string name="Name">Shade</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>5.9</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1.4</X><Y>2.4</Y><Z>2.4</Z></Vector3><Color3uint8 name="Color3uint8">4293976510</Color3uint8><token name="Material">1312</token><token name="shape">2</token><token name="TopSurface">0</token><token name="BottomSurface">0</token><float name="Transparency">0.1</float><bool name="CastShadow">false</bool></Properties></Item></Item><Item class="Model" referent="RBX47"><Properties><string name="Name">Plant</string><OptionalCoordinateFrame name="WorldPivotData"><CFrame><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CFrame></OptionalCoordinateFrame><BinaryString name="AttributesSerialize">AQAAAAUAAABPcmRlcgYAAAAAAAAAQA==</BinaryString></Properties><Item class="Part" referent="RBX48"><Properties><string name="Name">Pot</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>0.8</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1.6</X><Y>1.8</Y><Z>1.8</Z></Vector3><Color3uint8 name="Color3uint8">4290010940</Color3uint8><token name="Material">816</token><token name="shape">2</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX49"><Properties><string name="Name">Soil</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>1.6</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.1</X><Y>1.6</Y><Z>1.6</Z></Vector3><Color3uint8 name="Color3uint8">4283119400</Color3uint8><token name="Material">816</token><token name="shape">2</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX50"><Properties><string name="Name">Leaves</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0</X><Y>2.3</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1.6</X><Y>1.6</Y><Z>1.6</Z></Vector3><Color3uint8 name="Color3uint8">4282816070</Color3uint8><token name="Material">1280</token><token name="shape">0</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX51"><Properties><string name="Name">Leaves</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0.35</X><Y>2.9</Y><Z>0.2</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1.1</X><Y>1.1</Y><Z>1.1</Z></Vector3><Color3uint8 name="Color3uint8">4282816070</Color3uint8><token name="Material">1280</token><token name="shape">0</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX52"><Properties><string name="Name">Leaves</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>-0.35</X><Y>2.85</Y><Z>-0.2</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>1</X><Y>1</Y><Z>1</Z></Vector3><Color3uint8 name="Color3uint8">4282816070</Color3uint8><token name="Material">1280</token><token name="shape">0</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item><Item class="Part" referent="RBX53"><Properties><string name="Name">Leaves</string><bool name="Anchored">true</bool><CoordinateFrame name="CFrame"><X>0.05</X><Y>3.4</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><Vector3 name="size"><X>0.9</X><Y>0.9</Y><Z>0.9</Z></Vector3><Color3uint8 name="Color3uint8">4282816070</Color3uint8><token name="Material">1280</token><token name="shape">0</token><token name="TopSurface">0</token><token name="BottomSurface">0</token></Properties></Item></Item></Item></Item></Item><Item class="ServerScriptService" referent="RBX54"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX55"><Properties><string name="Name">BuildServer</string><ProtectedString name="Source">-- The server half of the build menu: the only place parts are really placed or deleted.
+-- It trusts nothing a client sends. It checks the part exists, snaps it to the grid itself, checks it fits
+-- on a build area with nothing in the way, and only lets you delete your own parts.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("BuildMenu")
+local Config = require(Shared.Config)
+local Catalog = require(Shared.Catalog)
+local Grid = require(Shared.Grid)
+
+local placed = workspace:FindFirstChild(Config.PlacedFolder)
+if not placed then
+	placed = Instance.new("Folder")
+	placed.Name = Config.PlacedFolder
+	placed.Parent = workspace
+end
+
+local remote = Instance.new("RemoteFunction")
+remote.Name = "BuildRequest"
+remote.Parent = Shared
+
+local buckets = {} -- [player] = { tokens, time }: how many requests they have left right now
+
+local function allowed(player)
+	local now = os.clock()
+	local most = Config.RequestsPerSecond * 2
+	local bucket = buckets[player] or { tokens = most, time = now }
+	bucket.tokens = math.min(most, bucket.tokens + (now - bucket.time) * Config.RequestsPerSecond)
+	bucket.time = now
+	buckets[player] = bucket
+	if bucket.tokens &lt; 1 then
+		return false
+	end
+	bucket.tokens -= 1
+	return true
+end
+
+local function isNumber(value)
+	return type(value) == "number" and value == value and math.abs(value) &lt; 1e6 -- a real number, not NaN or huge
+end
+
+local function countOwned(player)
+	local count = 0
+	for _, model in ipairs(placed:GetChildren()) do
+		if model:GetAttribute("Owner") == player.UserId then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function place(player, request)
+	local entry = Catalog.find(request.id)
+	if not entry then
+		return { ok = false, reason = "That part doesn't exist" }
+	end
+	if not Grid.isArea(request.area) then
+		return { ok = false, reason = "You can only build on the build area" }
+	end
+	if not (isNumber(request.x) and isNumber(request.z)) then
+		return { ok = false, reason = "That isn't a spot" }
+	end
+	if countOwned(player) &gt;= Config.MaxPartsPerPlayer then
+		return { ok = false, reason = "You've placed as many parts as you can" }
+	end
+	local turns = isNumber(request.turns) and math.floor(request.turns) % 4 or 0
+	local spot = Grid.solve(request.area, entry, request.x, request.z, turns)
+	if not spot.inside then
+		return { ok = false, reason = "It has to fit on the build area" }
+	end
+	if not Grid.isFree(spot, entry, placed) then
+		return { ok = false, reason = "Something is in the way" }
+	end
+
+	local model = entry.model:Clone()
+	if Config.AnchorPlacedParts then
+		if model:IsA("BasePart") then
+			model.Anchored = true
+		end
+		for _, part in ipairs(model:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+			end
+		end
+	end
+	model:PivotTo(spot.pivot)
+	model:SetAttribute("Owner", player.UserId)
+	model:SetAttribute("PartId", entry.id)
+	model:SetAttribute("Floor", entry.floor)
+	if model:IsA("Model") then
+		model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic -- with streaming on, it arrives all at once
+	end
+	model.Parent = placed
+	return { ok = true }
+end
+
+local function delete(player, request)
+	local model = request.model
+	if typeof(model) ~= "Instance" or model.Parent ~= placed then
+		return { ok = false, reason = "That isn't a placed part" }
+	end
+	if model:GetAttribute("Owner") ~= player.UserId then
+		return { ok = false, reason = "You can only delete your own parts" }
+	end
+	model:Destroy()
+	return { ok = true }
+end
+
+remote.OnServerInvoke = function(player, request)
+	if type(request) ~= "table" then
+		return { ok = false, reason = "Bad request" }
+	end
+	if not allowed(player) then
+		return { ok = false, reason = "Slow down a little" }
+	end
+	if request.action == "place" then
+		return place(player, request)
+	elseif request.action == "delete" then
+		return delete(player, request)
+	end
+	return { ok = false, reason = "Bad request" }
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	buckets[player] = nil
+	if Config.RemovePartsOnLeave then
+		for _, model in ipairs(placed:GetChildren()) do
+			if model:GetAttribute("Owner") == player.UserId then
+				model:Destroy()
+			end
+		end
+	end
+end)
+</ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX56"><Properties><string name="Name">StarterPlayer</string></Properties><Item class="StarterPlayerScripts" referent="RBX57"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="Folder" referent="RBX58"><Properties><string name="Name">BuildMenu</string></Properties><Item class="LocalScript" referent="RBX59"><Properties><string name="Name">BuildClient</string><ProtectedString name="Source">-- Starts the build menu when you join. All the work happens in BuildController.
+
+require(script.Parent:WaitForChild("BuildController")).Start()
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX60"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">-- The brain of the build menu on your screen. It opens and closes the menu, moves the ghost to where you
+-- point, and asks the server to place or delete parts (the server has the last word on both).
+--
+-- Your own LocalScripts can use it too, for example a shop button that opens the menu on a part:
+--
+--   local Build = require(game.Players.LocalPlayer.PlayerScripts:WaitForChild("BuildMenu"):WaitForChild("BuildController"))
+--   Build.Select("Furniture/Table")
+--
+--   Start()           gets everything ready (BuildClient does this for you)
+--   Open() Close() Toggle()
+--   Select(id)        start placing a part, by its id ("Tab/Model name") or its catalog entry.
+--                     Picking the part you're already placing stops placing.
+--   Rotate()          a quarter turn
+--   Place()           place it where the ghost is. Gives back true, or false and the reason.
+--   DeleteMode(on)    delete mode on (true), off (false), or the other way round (nothing)
+--   Delete(model)     delete one of your placed parts (nothing: the one you're pointing at)
+--   Stop()            stop placing or deleting
+--   AimAt(point)      aim at a spot in the world instead of where the mouse is
+--   State()           what the menu is doing right now, as a table
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local Shared = ReplicatedStorage:WaitForChild("BuildMenu")
+local Config = require(Shared:WaitForChild("Config"))
+local Catalog = require(Shared:WaitForChild("Catalog"))
+local Grid = require(Shared:WaitForChild("Grid"))
+local Ghost = require(script.Parent:WaitForChild("Ghost"))
+local MenuUI = require(script.Parent:WaitForChild("MenuUI"))
+
+local player = Players.LocalPlayer
+local Keys = Config.Keys
+local Theme = Config.Theme
+
+local RANGE = 1000 -- how far away you can point, in studs
+
+local BuildController = {}
+
+local started = false -- Start has begun
+local ready = false -- Start has finished
+local ui, ghost, remote, placed
+local glow -- the red outline on the part you're about to delete
+local placeRay, deleteRay -- what the pointing rays go through
+
+local isOpen = false
+local mode = "idle" -- "idle", "place" or "delete"
+local selected = nil -- the catalog entry you're placing
+local turns = 0 -- quarter turns, 0 to 3
+local aim = nil -- where the ghost is: { area, spot, good }
+local held = nil -- a spot in the world to aim at instead of the mouse (a tap on a phone, or AimAt)
+local target = nil -- in delete mode, the placed part you're pointing at
+local busy = false -- waiting for the server to answer
+local dirty = true -- the parts in BuildParts changed, so the tabs need making again
+
+-- Waits until Start has finished (and starts it if nobody has yet).
+local function ensureStarted()
+	if not started then
+		BuildController.Start()
+	end
+	while not ready do
+		task.wait()
+	end
+end
+
+local function partsFolder()
+	return ReplicatedStorage:FindFirstChild(Config.PartsFolder)
+end
+
+-- The catalog entry for an id, or nil. (Catalog.find would wait forever if BuildParts is missing.)
+local function findEntry(id)
+	if type(id) ~= "string" or not partsFolder() then
+		return nil
+	end
+	return Catalog.find(id)
+end
+
+-- The pointing rays never hit the ghost or your own character. When placing they go through placed parts
+-- too, so you always aim at the build area underneath.
+local function refreshRays()
+	local skip = { ghost.folder }
+	if player.Character then
+		table.insert(skip, player.Character)
+	end
+	deleteRay.FilterDescendantsInstances = skip
+	local skipPlaced = table.clone(skip)
+	table.insert(skipPlaced, placed)
+	placeRay.FilterDescendantsInstances = skipPlaced
+end
+
+local function setMode(newMode)
+	mode = newMode
+	ui:SetMode(newMode)
+end
+
+-- Puts the red outline on `thing` (nil: on nothing).
+local function setTarget(thing)
+	if thing == target then
+		return
+	end
+	target = thing
+	glow.Adornee = thing
+	glow.Enabled = thing ~= nil
+end
+
+-- The placed part that `part` belongs to, but only if it's yours.
+local function ownedRoot(part)
+	local thing = part and Grid.placedRoot(part, placed)
+	if thing and thing:GetAttribute("Owner") == player.UserId then
+		return thing
+	end
+	return nil
+end
+
+-- Your placed part at a spot in the world (a part standing on a floor tile wins over the tile).
+local function ownedAt(point)
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { placed }
+	local found = nil
+	for _, part in ipairs(workspace:GetPartBoundsInRadius(point, 0.25, params)) do
+		local thing = ownedRoot(part)
+		if thing and (not found or found:GetAttribute("Floor") == true) then
+			found = thing
+		end
+	end
+	return found
+end
+
+-- Where the ghost goes for a ray, or nil when the ray doesn't land on top of a build area.
+local function aimFor(origin, direction)
+	local hit = workspace:Raycast(origin, direction, placeRay)
+	if not hit or not Grid.isArea(hit.Instance) then
+		return nil
+	end
+	local area = hit.Instance
+	if hit.Normal:Dot(area.CFrame.UpVector) &lt; 0.5 then
+		return nil -- the side or bottom of the area, not the top
+	end
+	local here = area.CFrame:PointToObjectSpace(hit.Position) -- studs from the area's centre
+	local spot = Grid.solve(area, selected, here.X, here.Z, turns)
+	return { area = area, spot = spot, good = spot.inside and Grid.isFree(spot, selected, placed) }
+end
+
+-- The ray from the mouse into the world, or nil on a phone or tablet.
+local function mouseRay()
+	local camera = workspace.CurrentCamera
+	if not (camera and UserInputService.MouseEnabled) then
+		return nil
+	end
+	local where = UserInputService:GetMouseLocation()
+	return camera:ViewportPointToRay(where.X, where.Y)
+end
+
+-- Runs every frame: moves the ghost, or the red outline in delete mode.
+local function update(dt)
+	if mode == "place" and selected then
+		if held then
+			-- straight down onto the spot
+			aim = aimFor(held + Vector3.new(0, 3, 0), Vector3.new(0, -8, 0))
+		else
+			local ray = mouseRay()
+			aim = ray and aimFor(ray.Origin, ray.Direction * RANGE)
+		end
+		if aim then
+			ghost:Show(selected, aim.spot, aim.good)
+		else
+			ghost:Hide()
+		end
+		ghost:Step(dt)
+	elseif mode == "delete" then
+		if held then
+			-- a tap (or AimAt) picked the part: keep it unless it has gone
+			if target and target.Parent ~= placed then
+				setTarget(nil)
+			end
+		else
+			local ray = mouseRay()
+			local hit = ray and workspace:Raycast(ray.Origin, ray.Direction * RANGE, deleteRay)
+			setTarget(hit and ownedRoot(hit.Instance))
+		end
+	end
+end
+
+-- Makes the tabs and cards again from what's in BuildParts now.
+local function refreshTabs()
+	dirty = false
+	local tabs = {}
+	if partsFolder() then
+		tabs = Catalog.tabs()
+	end
+	ui:ShowTabs(tabs)
+	if selected then
+		local fresh = findEntry(selected.id)
+		if fresh then
+			selected = fresh -- the same part, maybe changed
+		else
+			BuildController.Stop() -- the part you were placing has gone
+		end
+	end
+end
+
+-- Notices when parts are added to or taken out of BuildParts, so the menu shows them next time it opens.
+local function watchParts()
+	local watched = nil
+	local function watch()
+		local folder = partsFolder()
+		if folder == watched then
+			return
+		end
+		watched = folder
+		dirty = true
+		if folder then
+			local function changed()
+				dirty = true
+			end
+			folder.DescendantAdded:Connect(changed)
+			folder.DescendantRemoving:Connect(changed)
+		end
+	end
+	ReplicatedStorage.ChildAdded:Connect(watch)
+	ReplicatedStorage.ChildRemoved:Connect(function(child)
+		if child == watched then
+			watched = nil
+			dirty = true
+			watch()
+		end
+	end)
+	watch()
+end
+
+-- What happens after the server answers: a red message if it said no.
+local function finish(ok, reply)
+	if not ok or type(reply) ~= "table" then
+		local reason = "Something went wrong, try again"
+		ui:Flash(reason)
+		return false, reason
+	end
+	if not reply.ok then
+		local reason = type(reply.reason) == "string" and reply.reason or "That didn't work"
+		ui:Flash(reason)
+		return false, reason
+	end
+	return true
+end
+
+-- A tap on a phone or tablet (not on a button).
+local function onTap(where, processed)
+	if processed or mode == "idle" then
+		return
+	end
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return
+	end
+	local ray = camera:ScreenPointToRay(where.X, where.Y)
+	if mode == "place" then
+		local hit = workspace:Raycast(ray.Origin, ray.Direction * RANGE, placeRay)
+		if hit and Grid.isArea(hit.Instance) then
+			held = hit.Position -- the ghost moves here; the Place button places it
+		end
+	elseif mode == "delete" then
+		local hit = workspace:Raycast(ray.Origin, ray.Direction * RANGE, deleteRay)
+		local thing = hit and ownedRoot(hit.Instance)
+		if thing and thing == target then
+			BuildController.Delete(thing) -- the second tap on the same part
+		else
+			held = thing and hit.Position or nil
+			setTarget(thing) -- the first tap picks it
+		end
+	end
+end
+
+local function onInput(input, processed)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if processed then
+			return -- the click was on a button
+		end
+		if mode == "place" then
+			BuildController.Place()
+		elseif mode == "delete" and target then
+			BuildController.Delete()
+		end
+		return
+	end
+	if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then
+		return -- typing in the chat, for example
+	end
+	if input.KeyCode == Keys.Toggle then
+		BuildController.Toggle()
+	elseif input.KeyCode == Keys.Rotate then
+		if mode == "place" then
+			BuildController.Rotate()
+		end
+	elseif input.KeyCode == Keys.Delete then
+		BuildController.DeleteMode()
+	elseif input.KeyCode == Keys.Stop then
+		if mode ~= "idle" then
+			BuildController.Stop()
+		end
+	end
+end
+
+-- Gets everything ready. BuildClient calls this when you join; calling it again does nothing.
+function BuildController.Start()
+	if started then
+		ensureStarted()
+		return BuildController
+	end
+	started = true
+
+	remote = Shared:WaitForChild("BuildRequest")
+	placed = workspace:WaitForChild(Config.PlacedFolder)
+
+	ghost = Ghost.new()
+	glow = Instance.new("Highlight")
+	glow.Name = "DeleteTarget"
+	glow.FillColor = Theme.Bad
+	glow.OutlineColor = Theme.Bad
+	glow.FillTransparency = 0.5
+	glow.OutlineTransparency = 0
+	glow.DepthMode = Enum.HighlightDepthMode.Occluded
+	glow.Enabled = false
+	glow.Parent = ghost.folder
+
+	placeRay = RaycastParams.new()
+	placeRay.FilterType = Enum.RaycastFilterType.Exclude
+	deleteRay = RaycastParams.new()
+	deleteRay.FilterType = Enum.RaycastFilterType.Exclude
+	refreshRays()
+	player.CharacterAdded:Connect(refreshRays)
+
+	ui = MenuUI.new({
+		toggle = function()
+			BuildController.Toggle()
+		end,
+		pick = function(entry)
+			BuildController.Select(entry)
+		end,
+		delete = function()
+			BuildController.DeleteMode()
+		end,
+		rotate = function()
+			BuildController.Rotate()
+		end,
+		place = function()
+			BuildController.Place()
+		end,
+		stop = function()
+			BuildController.Stop()
+		end,
+	})
+
+	watchParts()
+	UserInputService.InputBegan:Connect(onInput)
+	UserInputService.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
+			held = nil -- the mouse moved, so aim with the mouse again
+		end
+	end)
+	UserInputService.TouchTapInWorld:Connect(onTap)
+	RunService:BindToRenderStep("BuildMenu", Enum.RenderPriority.Camera.Value + 1, update)
+
+	ready = true
+	return BuildController
+end
+
+function BuildController.Open()
+	ensureStarted()
+	if isOpen then
+		return
+	end
+	isOpen = true
+	if dirty then
+		refreshTabs()
+	end
+	ui:SetOpen(true)
+end
+
+function BuildController.Close()
+	ensureStarted()
+	if not isOpen then
+		return
+	end
+	BuildController.Stop()
+	isOpen = false
+	ui:SetOpen(false)
+end
+
+function BuildController.Toggle()
+	ensureStarted()
+	if isOpen then
+		BuildController.Close()
+	else
+		BuildController.Open()
+	end
+end
+
+-- Start placing a part. `entryOrId` is a catalog entry or an id like "Walls/Brick Wall".
+-- Gives back the entry, or nil if you stopped or there's no such part.
+function BuildController.Select(entryOrId)
+	ensureStarted()
+	local id = type(entryOrId) == "table" and entryOrId.id or entryOrId
+	if mode == "place" and selected and selected.id == id then
+		BuildController.Stop() -- picking the same part again stops
+		return nil
+	end
+	local entry = findEntry(id)
+	if not entry then
+		ui:Flash("That part doesn't exist")
+		return nil
+	end
+	BuildController.Open()
+	if dirty then
+		refreshTabs() -- so the part's tab is in the menu even if it was added while the menu was open
+	end
+	setTarget(nil)
+	selected = entry
+	ui:MarkPicked(entry.id)
+	ui:SelectTab(entry.tab)
+	setMode("place")
+	return entry
+end
+
+function BuildController.Rotate()
+	ensureStarted()
+	turns = (turns + 1) % 4
+end
+
+-- Asks the server to place the part where the ghost is. Gives back true, or false and the reason.
+function BuildController.Place()
+	ensureStarted()
+	if mode ~= "place" or not selected then
+		return false, "Pick a part first"
+	end
+	if busy then
+		return false, "Busy"
+	end
+	if not aim then
+		ui:Flash("Point at the build area")
+		return false, "Point at the build area"
+	end
+	busy = true
+	local ok, reply = pcall(remote.InvokeServer, remote, {
+		action = "place",
+		id = selected.id,
+		area = aim.area,
+		x = aim.spot.x,
+		z = aim.spot.z,
+		turns = turns,
+	})
+	busy = false
+	return finish(ok, reply)
+end
+
+-- Delete mode on (true), off (false), or the other way round (nothing).
+function BuildController.DeleteMode(on)
+	ensureStarted()
+	if on == nil then
+		on = mode ~= "delete"
+	end
+	if on then
+		BuildController.Open()
+		selected = nil
+		aim = nil
+		held = nil
+		ghost:Clear()
+		ui:MarkPicked(nil)
+		setMode("delete")
+	elseif mode == "delete" then
+		BuildController.Stop()
+	end
+end
+
+-- Asks the server to delete `model` (nothing: the part you're pointing at). Gives back true, or false and the reason.
+function BuildController.Delete(model)
+	ensureStarted()
+	model = model or target
+	if not model then
+		ui:Flash("Point at one of your parts")
+		return false, "Point at one of your parts"
+	end
+	if busy then
+		return false, "Busy"
+	end
+	busy = true
+	local ok, reply = pcall(remote.InvokeServer, remote, { action = "delete", model = model })
+	busy = false
+	local done, reason = finish(ok, reply)
+	if done and model == target then
+		setTarget(nil)
+		held = nil
+	end
+	return done, reason
+end
+
+-- Stop placing or deleting (the menu stays open).
+function BuildController.Stop()
+	ensureStarted()
+	selected = nil
+	aim = nil
+	held = nil
+	ghost:Clear()
+	setTarget(nil)
+	ui:MarkPicked(nil)
+	setMode("idle")
+end
+
+-- Aim at a spot in the world instead of where the mouse is, until the mouse moves.
+-- When placing, the ghost goes there. In delete mode, your part at that spot gets the red outline.
+function BuildController.AimAt(point)
+	ensureStarted()
+	if typeof(point) ~= "Vector3" then
+		return
+	end
+	held = point
+	if mode == "delete" then
+		setTarget(ownedAt(point))
+	end
+	update(0)
+end
+
+-- What the menu is doing right now.
+function BuildController.State()
+	local where = nil
+	if aim then
+		where = {
+			area = aim.area,
+			x = aim.spot.x,
+			z = aim.spot.z,
+			inside = aim.spot.inside,
+			good = aim.good,
+			pivot = aim.spot.pivot,
+		}
+	end
+	return {
+		started = started,
+		ready = ready,
+		open = isOpen,
+		mode = mode,
+		selected = selected and selected.id or nil,
+		turns = turns,
+		aim = where,
+		target = target,
+		busy = busy,
+	}
+end
+
+return BuildController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX61"><Properties><string name="Name">Ghost</string><ProtectedString name="Source">-- The see-through "ghost" that shows where a part will go before you place it: green when it fits,
+-- red when it doesn't, standing on a flat plate the size of the grid squares it will cover.
+-- It lives under your camera, so only you can see it, and nothing can bump into it or raycast into it.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("BuildMenu"):WaitForChild("Config"))
+
+local Theme = Config.Theme
+
+local Ghost = {}
+Ghost.__index = Ghost
+
+local SHOWS = 0.55 -- how much of each part still shows in the ghost (1 = all of it, 0 = none)
+local PLATE_LIFT = 0.08 -- the plate floats this far above the build area, so it never flickers
+
+-- Things a copy must not keep: scripts would run, prompts and click detectors could be used, sounds would play.
+local STRIP = { "LuaSourceContainer", "ProximityPrompt", "ClickDetector", "Sound" }
+
+-- A copy of a model with nothing in it that could run, be clicked or make a noise.
+-- The menu uses it for the little pictures on the cards too.
+function Ghost.copy(model)
+	local copy = model:Clone()
+	for _, thing in ipairs(copy:GetDescendants()) do
+		for _, class in ipairs(STRIP) do
+			if thing:IsA(class) then
+				thing:Destroy()
+				break
+			end
+		end
+	end
+	return copy
+end
+
+-- True when an invisible part has nothing on it you could see (no picture, no sign).
+local function blank(part)
+	return part.Transparency &gt;= 0.99
+		and not part:FindFirstChildWhichIsA("Decal")
+		and not part:FindFirstChildWhichIsA("SurfaceGui")
+end
+
+-- Makes a copy see-through and harmless: it can't be bumped, touched or hit by a raycast, and casts no shadow.
+local function ghostly(copy)
+	local parts = copy:GetDescendants()
+	table.insert(parts, copy)
+	for _, part in ipairs(parts) do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.CastShadow = false
+			if blank(part) then
+				-- The green tint would paint an invisible part (like a hidden root part) as a solid box,
+				-- so it shrinks to a dot instead. Its position stays put, so the model's pivot doesn't move.
+				part.Size = Vector3.new(0.001, 0.001, 0.001)
+			end
+			part.Transparency = 1 - (1 - part.Transparency) * SHOWS
+		end
+	end
+end
+
+-- Makes the ghost's folder, tint and plate. Call Show to draw it.
+function Ghost.new()
+	local self = setmetatable({}, Ghost)
+
+	self.folder = Instance.new("Folder")
+	self.folder.Name = "BuildGhost"
+	self.folder.Parent = workspace.CurrentCamera
+
+	-- The green or red glow over the copy
+	self.tint = Instance.new("Highlight")
+	self.tint.Name = "Tint"
+	self.tint.FillTransparency = 0.55
+	self.tint.OutlineTransparency = 0
+	self.tint.DepthMode = Enum.HighlightDepthMode.Occluded
+	self.tint.Enabled = false
+	self.tint.Parent = self.folder
+
+	-- The flat plate on the ground, with an outline round it
+	self.plate = Instance.new("Part")
+	self.plate.Name = "Footprint"
+	self.plate.Anchored = true
+	self.plate.CanCollide = false
+	self.plate.CanQuery = false
+	self.plate.CanTouch = false
+	self.plate.CastShadow = false
+	self.plate.Material = Enum.Material.SmoothPlastic
+	self.plate.TopSurface = Enum.SurfaceType.Smooth
+	self.plate.BottomSurface = Enum.SurfaceType.Smooth
+	self.plate.Transparency = 0.5
+	self.plate.Size = Vector3.new(1, 0.1, 1)
+	self.outline = Instance.new("SelectionBox")
+	self.outline.Name = "Outline"
+	self.outline.LineThickness = 0.06
+	self.outline.SurfaceTransparency = 1
+	self.outline.Adornee = self.plate
+	self.outline.Parent = self.plate
+
+	self.entry = nil -- the part the copy is of
+	self.copy = nil
+	self.target = nil -- where the copy is heading
+	self.current = nil -- where the copy is now (it glides to the target)
+	self.good = nil
+	return self
+end
+
+-- Draws the ghost of `entry` at `spot` (from Grid.solve). `good` true: green, false: red.
+-- Call it every frame; it only makes a new copy when the part changes.
+function Ghost:Show(entry, spot, good)
+	if self.entry ~= entry then
+		self:Clear()
+		self.entry = entry
+		self.copy = Ghost.copy(entry.model)
+		self.copy.Name = "Copy"
+		ghostly(self.copy)
+	end
+
+	local camera = workspace.CurrentCamera
+	if self.folder.Parent ~= camera then
+		self.folder.Parent = camera
+	end
+
+	self.target = spot.pivot
+	if not self.current then
+		-- just appeared: jump straight there instead of gliding in from somewhere else
+		self.current = spot.pivot
+		self.copy:PivotTo(spot.pivot)
+	end
+	if self.copy.Parent ~= self.folder then
+		self.copy.Parent = self.folder
+	end
+	self.tint.Adornee = self.copy
+	self.tint.Enabled = true
+
+	if self.good ~= good then
+		self.good = good
+		local colour = good and Theme.Good or Theme.Bad
+		self.tint.FillColor = colour
+		self.tint.OutlineColor = colour
+		self.plate.Color = colour
+		self.outline.Color3 = colour
+	end
+
+	-- the plate snaps straight to the squares the part will cover
+	self.plate.Size = Vector3.new(spot.boxSize.X, 0.1, spot.boxSize.Z)
+	self.plate.CFrame = spot.ground * CFrame.new(0, PLATE_LIFT, 0)
+	if self.plate.Parent ~= self.folder then
+		self.plate.Parent = self.folder
+	end
+end
+
+-- Glides the copy towards where it should be. Call it every frame with the frame time.
+function Ghost:Step(dt)
+	if not (self.copy and self.target and self.current) or self.copy.Parent == nil then
+		return
+	end
+	self.current = self.current:Lerp(self.target, math.min(1, dt * 20))
+	self.copy:PivotTo(self.current)
+end
+
+-- Hides the ghost but keeps the copy, for when you point somewhere you can't build.
+function Ghost:Hide()
+	if self.copy then
+		self.copy.Parent = nil
+	end
+	self.plate.Parent = nil
+	self.tint.Enabled = false
+	self.tint.Adornee = nil
+	self.current = nil
+end
+
+-- Hides the ghost and throws the copy away, for when you stop placing.
+function Ghost:Clear()
+	self:Hide()
+	if self.copy then
+		self.copy:Destroy()
+	end
+	self.copy = nil
+	self.entry = nil
+	self.target = nil
+end
+
+return Ghost
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX62"><Properties><string name="Name">MenuUI</string><ProtectedString name="Source">-- Everything the build menu draws on your screen: the Build button, the panel with tabs and part cards,
+-- the bar that tells you what to do while you place or delete, and the red messages when something
+-- doesn't work. It only draws things. BuildController decides what happens when you press them.
+--
+-- Labels are plain words on purpose: Roblox draws many emoji and symbols as blank squares.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local Config = require(ReplicatedStorage:WaitForChild("BuildMenu"):WaitForChild("Config"))
+local Ghost = require(script.Parent:WaitForChild("Ghost"))
+
+local Theme = Config.Theme
+local Keys = Config.Keys
+
+local MenuUI = {}
+MenuUI.__index = MenuUI
+
+local PANEL_HEIGHT = 172
+local BAR_HEIGHT = 44
+local GAP = 8 -- space between the panel, the bar and the bottom of the screen
+local CARD_WIDTH, CARD_HEIGHT = 104, 110
+local MOST_WIDTH = 960
+local FOV = 40 -- how wide the card pictures' camera sees, in degrees
+local VIEW_FROM = Vector3.new(0.8, 0.7, -1).Unit -- card pictures look from the front right, a bit above (the front is -Z)
+local SLIDE = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local FLASH_TIME = 1.6
+
+-- What the bar says in each mode, on a computer and on a phone or tablet
+local HINTS = {
+	place = "Click the build area to place it",
+	delete = "Click one of your parts to delete it",
+}
+local TOUCH_HINTS = {
+	place = "Tap the build area to aim, then press Place",
+	delete = "Tap one of your parts, then tap it again to delete it",
+}
+
+-- Makes an Instance and sets its properties. The Parent is set last, which is faster.
+local function make(class, props)
+	local thing = Instance.new(class)
+	for key, value in pairs(props) do
+		if key ~= "Parent" then
+			thing[key] = value
+		end
+	end
+	thing.Parent = props.Parent
+	return thing
+end
+
+-- Rounds the corners of a frame or button.
+local function round(thing, radius)
+	make("UICorner", { CornerRadius = UDim.new(0, radius), Parent = thing })
+end
+
+-- A text button in the menu's colours.
+local function button(props)
+	props.BackgroundColor3 = props.BackgroundColor3 or Theme.Card
+	props.TextColor3 = props.TextColor3 or Theme.Text
+	props.TextSize = props.TextSize or 16
+	props.Font = Theme.Font
+	props.AutoButtonColor = true
+	props.BorderSizePixel = 0
+	local parent = props.Parent
+	props.Parent = nil
+	local thing = make("TextButton", props)
+	round(thing, 8)
+	thing.Parent = parent
+	return thing
+end
+
+-- A line of text with no background.
+local function label(props)
+	props.BackgroundTransparency = 1
+	props.TextColor3 = props.TextColor3 or Theme.Text
+	props.TextSize = props.TextSize or 16
+	props.Font = Theme.Font
+	return make("TextLabel", props)
+end
+
+-- A little 3D picture of a part, for its card.
+local function preview(entry, size)
+	local view = make("ViewportFrame", {
+		Name = "Preview",
+		BackgroundTransparency = 1,
+		Size = size,
+	})
+	local copy = Ghost.copy(entry.model)
+	local box, boxSize
+	if copy:IsA("BasePart") then
+		box, boxSize = copy.CFrame, copy.Size
+	else
+		box, boxSize = copy:GetBoundingBox()
+	end
+	-- back off far enough that a ball round the whole part fits in the picture
+	local radius = boxSize.Magnitude / 2
+	local distance = radius / math.sin(math.rad(FOV / 2)) * 1.05
+	local from = box:VectorToWorldSpace(VIEW_FROM) -- "front right" of the part itself, even if it's turned
+	local camera = make("Camera", {
+		FieldOfView = FOV,
+		CFrame = CFrame.lookAt(box.Position + from * distance, box.Position),
+		Parent = view,
+	})
+	view.CurrentCamera = camera
+	view.LightDirection = -from -- the light comes from behind the camera, so the side you see is lit
+	copy.Parent = view
+	return view
+end
+
+-- A card for one part: its picture, its name, and an orange outline when it's the one you picked.
+local function card(entry, order, picked)
+	local thing = make("TextButton", {
+		Name = entry.name,
+		Text = "",
+		AutoButtonColor = true,
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+		LayoutOrder = order,
+		Size = UDim2.fromOffset(CARD_WIDTH, CARD_HEIGHT),
+	})
+	thing:SetAttribute("PartId", entry.id)
+	round(thing, 8)
+	local stroke = make("UIStroke", {
+		Name = "Picked",
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border, -- outline the card, not its text
+		Color = Theme.Accent,
+		Thickness = 3,
+		Enabled = picked,
+		Parent = thing,
+	})
+	local picture = preview(entry, UDim2.fromOffset(CARD_WIDTH - 8, 76))
+	picture.Position = UDim2.fromOffset(4, 4)
+	picture.Parent = thing
+	local name = label({
+		Name = "Label",
+		Text = entry.name,
+		TextScaled = true, -- long names shrink to fit
+		TextWrapped = true,
+		Position = UDim2.fromOffset(4, 82),
+		Size = UDim2.fromOffset(CARD_WIDTH - 8, 24),
+		Parent = thing,
+	})
+	make("UITextSizeConstraint", { MaxTextSize = 14, MinTextSize = 8, Parent = name })
+	return thing, stroke
+end
+
+-- Builds the whole menu. `actions` are the functions its buttons call:
+-- toggle(), pick(entry), delete(), rotate(), place() and stop().
+function MenuUI.new(actions)
+	local self = setmetatable({}, MenuUI)
+	self.actions = actions
+	self.touch = UserInputService.TouchEnabled and not UserInputService.MouseEnabled -- a phone or tablet
+	self.open = false
+	self.mode = "idle"
+	self.tabs = {}
+	self.tab = nil -- the name of the tab you're looking at
+	self.picked = nil -- the id of the card with the outline
+	self.tabButtons = {}
+	self.cardStrokes = {}
+	self.scale = 1
+	self.slideCount = 0
+	self.flashCount = 0
+
+	local function keyText(key)
+		return self.touch and "" or ("  [" .. key.Name .. "]")
+	end
+
+	self.gui = make("ScreenGui", {
+		Name = "BuildMenu",
+		ResetOnSpawn = false, -- keep the menu when you respawn
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	})
+
+	-- The Build button on the left
+	self.toggle = button({
+		Name = "Toggle",
+		Text = "Build" .. keyText(Keys.Toggle),
+		TextSize = 18,
+		BackgroundColor3 = Theme.Panel,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 12, 0.5, 0),
+		Size = UDim2.fromOffset(self.touch and 96 or 124, 44),
+		Parent = self.gui,
+	})
+	self.toggleStroke = make("UIStroke", {
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		Color = Theme.Accent,
+		Thickness = 2,
+		Enabled = false,
+		Parent = self.toggle,
+	})
+	self.toggle.Activated:Connect(function()
+		actions.toggle()
+	end)
+
+	-- The panel at the bottom
+	self.panel = make("Frame", {
+		Name = "Panel",
+		Active = true, -- clicks on the panel stay on the panel and don't place anything behind it
+		AnchorPoint = Vector2.new(0.5, 1),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = 0.05,
+		BorderSizePixel = 0,
+		Size = UDim2.fromOffset(MOST_WIDTH, PANEL_HEIGHT),
+		Visible = false,
+		Parent = self.gui,
+	})
+	round(self.panel, 12)
+	self.panelScale = make("UIScale", { Parent = self.panel })
+
+	-- The tabs along the top of the panel
+	self.tabsFrame = make("ScrollingFrame", {
+		Name = "Tabs",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(8, 8),
+		Size = UDim2.new(1, -134, 0, 30),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Muted,
+		Parent = self.panel,
+	})
+	make("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = self.tabsFrame,
+	})
+
+	-- The Delete button at the top right
+	self.deleteButton = button({
+		Name = "Delete",
+		Text = "Delete" .. keyText(Keys.Delete),
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -8, 0, 8),
+		Size = UDim2.fromOffset(110, 30),
+		Parent = self.panel,
+	})
+	self.deleteButton.Activated:Connect(function()
+		actions.delete()
+	end)
+
+	-- The row of part cards
+	self.cards = make("ScrollingFrame", {
+		Name = "Cards",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(8, 46),
+		Size = UDim2.new(1, -16, 0, 118),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		ScrollBarThickness = 6,
+		ScrollBarImageColor3 = Theme.Muted,
+		Parent = self.panel,
+	})
+	make("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		Padding = UDim.new(0, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = self.cards,
+	})
+
+	-- What the panel says when there are no parts yet
+	self.empty = label({
+		Name = "Empty",
+		Text = "add Models to ReplicatedStorage." .. Config.PartsFolder,
+		TextColor3 = Theme.Muted,
+		TextWrapped = true,
+		Position = UDim2.fromOffset(8, 46),
+		Size = UDim2.new(1, -16, 0, CARD_HEIGHT),
+		Visible = false,
+		Parent = self.panel,
+	})
+
+	-- The bar above the panel: what to do now, and the Rotate, Place and Stop buttons
+	self.bar = make("Frame", {
+		Name = "ActionBar",
+		Active = true,
+		AnchorPoint = Vector2.new(0.5, 1),
+		BackgroundColor3 = Theme.Panel,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		Size = UDim2.fromOffset(MOST_WIDTH, BAR_HEIGHT),
+		Visible = false,
+		Parent = self.gui,
+	})
+	round(self.bar, 10)
+	self.barScale = make("UIScale", { Parent = self.bar })
+	self.hint = label({
+		Name = "Hint",
+		TextColor3 = Theme.Text,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(1, -12, 1, 0),
+		Parent = self.bar,
+	})
+	local buttons = make("Frame", {
+		Name = "Buttons",
+		AnchorPoint = Vector2.new(1, 0.5),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundTransparency = 1,
+		Position = UDim2.new(1, -6, 0.5, 0),
+		Size = UDim2.fromOffset(0, 34),
+		Parent = self.bar,
+	})
+	make("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = buttons,
+	})
+	self.rotateButton = button({
+		Name = "Rotate",
+		Text = "Rotate" .. keyText(Keys.Rotate),
+		LayoutOrder = 1,
+		Size = UDim2.fromOffset(self.touch and 88 or 112, 34),
+		Visible = false,
+		Parent = buttons,
+	})
+	self.placeButton = button({
+		Name = "Place",
+		Text = "Place",
+		TextColor3 = Theme.Panel,
+		BackgroundColor3 = Theme.Good,
+		LayoutOrder = 2,
+		Size = UDim2.fromOffset(88, 34),
+		Visible = false,
+		Parent = buttons,
+	})
+	self.stopButton = button({
+		Name = "Stop",
+		Text = "Stop" .. keyText(Keys.Stop),
+		LayoutOrder = 3,
+		Size = UDim2.fromOffset(self.touch and 80 or 96, 34),
+		Visible = false,
+		Parent = buttons,
+	})
+	self.rotateButton.Activated:Connect(function()
+		actions.rotate()
+	end)
+	self.placeButton.Activated:Connect(function()
+		actions.place()
+	end)
+	self.stopButton.Activated:Connect(function()
+		actions.stop()
+	end)
+
+	-- The red message that pops up when something doesn't work, just above the bar
+	self.flash = label({
+		Name = "Flash",
+		BackgroundTransparency = 0.1,
+		BackgroundColor3 = Theme.Panel,
+		TextColor3 = Theme.Bad,
+		AnchorPoint = Vector2.new(0.5, 1),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, 32),
+		Visible = false,
+		Parent = self.gui,
+	})
+	round(self.flash, 8)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), Parent = self.flash })
+	self.flashScale = make("UIScale", { Parent = self.flash })
+
+	-- Fit the menu to the screen now, and again whenever the screen changes size (like turning a phone)
+	local watching
+	local function watchCamera()
+		if watching then
+			watching:Disconnect()
+			watching = nil
+		end
+		local camera = workspace.CurrentCamera
+		if camera then
+			watching = camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+				self:Layout()
+			end)
+		end
+		self:Layout()
+	end
+	workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watchCamera)
+	watchCamera()
+
+	self:SetMode("idle")
+	self.gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+	return self
+end
+
+-- Where the panel sits when it's open, and where it hides (just below the screen) when it's shut.
+function MenuUI:openPosition()
+	return UDim2.new(0.5, 0, 1, -GAP)
+end
+
+function MenuUI:closedPosition()
+	return UDim2.new(0.5, 0, 1, PANEL_HEIGHT * self.scale + 40)
+end
+
+-- Sizes everything to fit the screen. Small screens get a smaller menu, and phones leave room at the
+-- sides for the thumbstick and the jump button.
+function MenuUI:Layout()
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return
+	end
+	local screen = camera.ViewportSize
+	local scale = math.clamp(screen.Y / 720, 0.62, 1)
+	local room = self.touch and 360 or 40
+	local width = math.max(200, math.min(MOST_WIDTH, (screen.X - room) / scale))
+	self.scale = scale
+	self.panelScale.Scale = scale
+	self.barScale.Scale = scale
+	self.flashScale.Scale = scale
+	self.panel.Size = UDim2.fromOffset(width, PANEL_HEIGHT)
+	self.bar.Size = UDim2.fromOffset(width, BAR_HEIGHT)
+	local barBottom = GAP + PANEL_HEIGHT * scale + GAP
+	self.bar.Position = UDim2.new(0.5, 0, 1, -barBottom)
+	self.flash.Position = UDim2.new(0.5, 0, 1, -(barBottom + BAR_HEIGHT * scale + GAP))
+	-- stop any slide and put the panel straight where it belongs
+	self.slideCount += 1
+	if self.slide then
+		self.slide:Cancel()
+		self.slide = nil
+	end
+	self.panel.Position = self.open and self:openPosition() or self:closedPosition()
+	self.panel.Visible = self.open
+end
+
+-- Shows the tabs and cards for `tabs` (from Catalog.tabs()). Keeps the same tab open if it's still there.
+function MenuUI:ShowTabs(tabs)
+	self.tabs = tabs
+	for _, child in ipairs(self.tabsFrame:GetChildren()) do
+		if child:IsA("GuiButton") then
+			child:Destroy()
+		end
+	end
+	self.tabButtons = {}
+	local keep = nil
+	for index, tab in ipairs(tabs) do
+		local thing = button({
+			Name = tab.name,
+			Text = tab.name,
+			TextSize = 15,
+			AutomaticSize = Enum.AutomaticSize.X,
+			LayoutOrder = index,
+			Size = UDim2.new(0, 0, 1, 0),
+			Parent = self.tabsFrame,
+		})
+		make("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), Parent = thing })
+		thing.Activated:Connect(function()
+			self:SelectTab(tab.name)
+		end)
+		self.tabButtons[tab.name] = thing
+		if tab.name == self.tab then
+			keep = tab.name
+		end
+	end
+	self.empty.Visible = #tabs == 0
+	self.tab = nil -- so SelectTab makes the cards again
+	self:SelectTab(keep or (tabs[1] and tabs[1].name))
+end
+
+-- Shows the cards of the tab called `name`.
+function MenuUI:SelectTab(name)
+	if name == self.tab then
+		return
+	end
+	self.tab = name
+	for tabName, thing in pairs(self.tabButtons) do
+		local on = tabName == name
+		thing.BackgroundColor3 = on and Theme.Accent or Theme.Card
+		thing.TextColor3 = on and Theme.Panel or Theme.Text
+	end
+	for _, child in ipairs(self.cards:GetChildren()) do
+		if child:IsA("GuiButton") then
+			child:Destroy()
+		end
+	end
+	self.cardStrokes = {}
+	self.cards.CanvasPosition = Vector2.zero
+	local items = {}
+	for _, tab in ipairs(self.tabs) do
+		if tab.name == name then
+			items = tab.items
+			break
+		end
+	end
+	for index, entry in ipairs(items) do
+		local thing, stroke = card(entry, index, entry.id == self.picked)
+		thing.Activated:Connect(function()
+			self.actions.pick(entry)
+		end)
+		self.cardStrokes[entry.id] = stroke
+		thing.Parent = self.cards
+	end
+end
+
+-- Puts the orange outline on the card with this id (nil: on no card).
+function MenuUI:MarkPicked(id)
+	self.picked = id
+	for partId, stroke in pairs(self.cardStrokes) do
+		stroke.Enabled = partId == id
+	end
+end
+
+-- Slides the panel up (true) or down (false).
+function MenuUI:SetOpen(open)
+	self.open = open
+	self.toggleStroke.Enabled = open
+	self.slideCount += 1
+	local count = self.slideCount
+	if self.slide then
+		self.slide:Cancel()
+	end
+	if open then
+		self.panel.Visible = true
+	end
+	self.slide = TweenService:Create(self.panel, SLIDE, {
+		Position = open and self:openPosition() or self:closedPosition(),
+	})
+	self.slide.Completed:Connect(function()
+		-- hide it once it has slid away (unless it was opened again meanwhile)
+		if count == self.slideCount and not self.open then
+			self.panel.Visible = false
+		end
+	end)
+	self.slide:Play()
+	self:showBar()
+end
+
+-- Shows the bar only while the menu is open and you're placing or deleting.
+function MenuUI:showBar()
+	self.bar.Visible = self.open and self.mode ~= "idle"
+	-- the hint gets all the room the buttons don't use
+	local used = 6
+	for _, thing in ipairs({ self.rotateButton, self.placeButton, self.stopButton }) do
+		if thing.Visible then
+			used += thing.Size.X.Offset + 6
+		end
+	end
+	self.hint.Size = UDim2.new(1, -(12 + used + 6), 1, 0)
+end
+
+-- Switches the buttons and the hint to "idle", "place" or "delete".
+function MenuUI:SetMode(mode)
+	self.mode = mode
+	local deleting = mode == "delete"
+	self.deleteButton.BackgroundColor3 = deleting and Theme.Bad or Theme.Card
+	self.rotateButton.Visible = mode == "place"
+	self.placeButton.Visible = mode == "place" and self.touch
+	self.stopButton.Visible = mode ~= "idle"
+	self.hint.Text = (self.touch and TOUCH_HINTS or HINTS)[mode] or ""
+	self:showBar()
+end
+
+-- Shows a short red message, like the reason a part couldn't be placed.
+function MenuUI:Flash(text)
+	self.flashCount += 1
+	local count = self.flashCount
+	self.flash.Text = text
+	self.flash.Visible = true
+	task.delay(FLASH_TIME, function()
+		-- only hide it if no newer message came along
+		if count == self.flashCount then
+			self.flash.Visible = false
+		end
+	end)
+end
+
+return MenuUI
+</ProtectedString></Properties></Item></Item></Item></Item></roblox>

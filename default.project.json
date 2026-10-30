@@ -1,0 +1,27 @@
+{
+  "name": "BuildMenu",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "BuildMenu": {
+        "$path": "src/ReplicatedStorage/BuildMenu"
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "BuildServer": {
+        "$path": "src/ServerScriptService/BuildServer.server.lua"
+      }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "BuildMenu": {
+          "$path": "src/StarterPlayerScripts/BuildMenu"
+        }
+      }
+    }
+  }
+}
